@@ -464,7 +464,7 @@ acquire_lock() {
     # Keep file descriptor 9 open for the lifetime of this process.
     # The operating system releases the lock automatically when the
     # process exits, crashes, or is forcibly terminated.
-    if ! flock -n 9; then
+    if ! flock -w 1 9; then
         show_warning \
             "Folder Sync" \
             "Another synchronization is already running."
