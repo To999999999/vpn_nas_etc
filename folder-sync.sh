@@ -61,7 +61,7 @@ LOG_DIR=""
 RUN_LOG=""
 ERROR_LOG=""
 STATE_DIR=""
-LOCK_DIR=""
+LOCK_FILE=""
 
 # Per-run counters.
 SYNC_SUCCESS_COUNT=0
@@ -116,7 +116,7 @@ configure_runtime_directories() {
 
     RUN_LOG="${LOG_DIR}/sync.log"
     ERROR_LOG="${LOG_DIR}/errors.log"
-    LOCK_DIR="${STATE_DIR}/lock"
+    LOCK_FILE="${STATE_DIR}/folder-sync.lock"
 }
 
 configure_ssh_options() {
@@ -151,10 +151,6 @@ cleanup() {
     for temporary_file in "${TEMPORARY_FILES[@]}"; do
         rm -f -- "$temporary_file"
     done
-
-    if [[ -n "$LOCK_DIR" ]]; then
-        rm -rf -- "$LOCK_DIR" 2>/dev/null || true
-    fi
 }
 
 handle_signal() {
@@ -422,6 +418,7 @@ check_dependencies() {
         awk
         cat
         date
+        flock
         gpgconf
         grep
         mkdir
@@ -447,25 +444,42 @@ check_dependencies() {
 }
 
 acquire_lock() {
-    local existing_pid="unknown"
+    mkdir -p "$STATE_DIR" || {
+        show_error \
+            "Folder Sync" \
+            "Could not create the synchronization state directory."
 
-    if mkdir "$LOCK_DIR" 2>/dev/null; then
-        printf '%s\n' "$$" > "${LOCK_DIR}/pid"
-        return 0
+        return 1
+    }
+
+    # Open the lock file on file descriptor 9.
+    exec 9>"$LOCK_FILE" || {
+        show_error \
+            "Folder Sync" \
+            "Could not open the synchronization lock file."
+
+        return 1
+    }
+
+    # Keep file descriptor 9 open for the lifetime of this process.
+    # The operating system releases the lock automatically when the
+    # process exits, crashes, or is forcibly terminated.
+    if ! flock -n 9; then
+        show_warning \
+            "Folder Sync" \
+            "Another synchronization is already running."
+
+        return 1
     fi
 
-    if [[ -r "${LOCK_DIR}/pid" ]]; then
-        existing_pid="$(
-            cat "${LOCK_DIR}/pid" 2>/dev/null ||
-                printf 'unknown'
-        )"
-    fi
+    # Store informational details in the file. These values are not
+    # used to determine whether the lock is active.
+    printf 'pid=%s\nstarted=%s\n' \
+        "$$" \
+        "$(timestamp)" \
+        >&9
 
-    show_warning \
-        "Folder Sync" \
-        "Another synchronization is already running (PID: ${existing_pid})."
-
-    return 1
+    log_info "Acquired synchronization lock: ${LOCK_FILE}"
 }
 
 # ==============================================================================
